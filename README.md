@@ -207,13 +207,10 @@ smart-access-system/
 ├── platformio.ini              ← PlatformIO build configuration
 ├── src/
 │   └── main.c                  ← Full firmware source
-├── docs/
-│   ├── technical_report.pdf    ← Full technical report
-│   └── test_cases.md           ← Structured test case results
+
 ├── schematics/
-│   └── schematic_overview.md   ← Circuit schematic description & pin map
-└── tests/
-    └── test_log.md             ← UART test output evidence
+│   └── schematic_smart access png   ← Circuit schematic description & pin map
+         
 ```
 
 ---
