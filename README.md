@@ -1,7 +1,7 @@
 # Smart Access Security System
-### EENG1030 — Embedded Systems | Project 2: Specialist Embedded Systems Project
+# Embedded Systems | Project 2: Specialist Embedded Systems Project
 **Student:** Kotla Jhansi Lakshmi | **Student No:** A00046968
-**Submission Date:** 10 May 2026
+
 
 ---
 
