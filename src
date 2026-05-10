@@ -1,0 +1,535 @@
+#include "stm32l4xx_hal.h"
+#include "st7735/st7735.h"
+#include "st7735/fonts.h"
+#include <string.h>
+#include <stdio.h>
+
+/*
+Display: SCK PA5, SDA PA7, CS PA4, DC PA6, RST PA0
+Buzzer: PA1
+Keypad: PB0 PB4 PB5 PB6 PA8 PA9 PA10
+UART2: PA2 TX, PA3 RX
+*/
+
+UART_HandleTypeDef huart2;
+SPI_HandleTypeDef hspi1;
+
+#define BUZZER_PORT GPIOA
+#define BUZZER_PIN  GPIO_PIN_1
+#define MAX_ATTEMPTS 3
+
+GPIO_TypeDef* keyPorts[7] = {
+    GPIOB, GPIOB, GPIOB, GPIOB, GPIOA, GPIOA, GPIOA
+};
+
+uint16_t keyPins[7] = {
+    GPIO_PIN_0, GPIO_PIN_4, GPIO_PIN_5, GPIO_PIN_6,
+    GPIO_PIN_8, GPIO_PIN_9, GPIO_PIN_10
+};
+
+typedef struct {
+    int pinA;
+    int pinB;
+    char key;
+} KeyPair;
+
+KeyPair keyPairs[12] = {
+    {2,3,'1'}, {2,5,'3'}, {1,2,'2'},
+    {7,3,'4'}, {7,1,'5'}, {5,7,'6'},
+    {3,6,'7'}, {1,6,'8'}, {5,6,'9'},
+    {3,4,'*'}, {1,4,'0'}, {5,4,'#'}
+};
+
+int pinCount = 0;
+int wrongAttempts = 0;
+uint8_t systemLocked = 0;
+
+void SystemClock_Config(void);
+void MX_USART2_UART_Init(void);
+void MX_BUZZER_GPIO_Init(void);
+void MX_SPI1_Init(void);
+
+void UART_Print(char *msg);
+void Beep(uint16_t duration_ms);
+
+void Set_Pin_Output_Low(int index);
+void Set_Pin_InputPullup(int index);
+char Get_Key_From_Pair(int a, int b);
+char Keypad_Read(void);
+
+void Screen_Home(void);
+void Screen_Pin(void);
+void Screen_Granted(void);
+void Screen_Denied(void);
+void Screen_Locked(void);
+void Screen_Cleared(void);
+
+void Access_Granted(void);
+void Access_Denied(void);
+void System_Locked(void);
+
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+
+    MX_USART2_UART_Init();
+    MX_BUZZER_GPIO_Init();
+    MX_SPI1_Init();
+
+    ST7735_Unselect();
+    HAL_Delay(100);
+    ST7735_Init();
+
+    Screen_Home();
+
+    UART_Print("\r\n================================\r\n");
+    UART_Print("     SMART ACCESS SYSTEM\r\n");
+    UART_Print("================================\r\n");
+    UART_Print("Enter PIN: ");
+
+    Beep(120);
+    HAL_Delay(180);
+    Beep(120);
+
+    while (1)
+    {
+        char key = Keypad_Read();
+
+        if (key != 0 && systemLocked == 0)
+        {
+            if (key == '*')
+            {
+                pinCount = 0;
+                Screen_Cleared();
+                UART_Print("\r\nPIN cleared\r\n");
+                UART_Print("Enter PIN: ");
+                Beep(80);
+                HAL_Delay(1500);
+                Screen_Home();
+            }
+            else if (key == '1')
+            {
+                pinCount++;
+
+                UART_Print("* ");
+
+                Screen_Pin();
+                Beep(80);
+
+                if (pinCount >= 3)
+                {
+                    Access_Granted();
+                    pinCount = 0;
+                    Screen_Home();
+                    UART_Print("\r\nEnter PIN: ");
+                }
+            }
+            else
+            {
+                pinCount = 0;
+                Access_Denied();
+
+                if (systemLocked == 0)
+                {
+                    Screen_Home();
+                    UART_Print("Enter PIN: ");
+                }
+            }
+        }
+
+        HAL_Delay(50);
+    }
+}
+
+/* ---------------- SCREEN UI ---------------- */
+
+void Screen_Home(void)
+{
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 24, ST7735_BLUE);
+    ST7735_WriteString(8, 6, "SMART LOCK", Font_7x10, ST7735_WHITE, ST7735_BLUE);
+
+    ST7735_WriteString(8, 38, "WELCOME", Font_11x18, ST7735_GREEN, ST7735_BLACK);
+
+    ST7735_FillRectangle(8, 72, 112, 34, ST7735_WHITE);
+    ST7735_WriteString(18, 82, "ENTER PIN", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+    ST7735_WriteString(14, 142, "SECURE MODE", Font_7x10, ST7735_YELLOW, ST7735_BLACK);
+}
+
+void Screen_Pin(void)
+{
+    char stars[4] = "---";
+
+    for (int i = 0; i < pinCount && i < 3; i++)
+        stars[i] = '*';
+
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 24, ST7735_BLUE);
+    ST7735_WriteString(8, 6, "AUTH MODE", Font_7x10, ST7735_WHITE, ST7735_BLUE);
+
+    ST7735_WriteString(8, 38, "VERIFYING", Font_11x18, ST7735_CYAN, ST7735_BLACK);
+
+    ST7735_FillRectangle(18, 75, 92, 34, ST7735_WHITE);
+    ST7735_WriteString(36, 84, stars, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+    ST7735_WriteString(8, 142, "PIN HIDDEN", Font_7x10, ST7735_GREEN, ST7735_BLACK);
+}
+
+void Screen_Granted(void)
+{
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 26, ST7735_GREEN);
+    ST7735_WriteString(18, 7, "UNLOCKED", Font_7x10, ST7735_BLACK, ST7735_GREEN);
+
+    ST7735_WriteString(20, 45, "ACCESS", Font_11x18, ST7735_GREEN, ST7735_BLACK);
+    ST7735_WriteString(16, 72, "GRANTED", Font_11x18, ST7735_GREEN, ST7735_BLACK);
+
+    ST7735_WriteString(20, 130, "DOOR OPEN", Font_7x10, ST7735_WHITE, ST7735_BLACK);
+}
+
+void Screen_Denied(void)
+{
+    char attemptText[20];
+    sprintf(attemptText, "TRY %d OF 3", wrongAttempts);
+
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 26, ST7735_RED);
+    ST7735_WriteString(28, 7, "ALERT", Font_7x10, ST7735_WHITE, ST7735_RED);
+
+    ST7735_WriteString(20, 45, "ACCESS", Font_11x18, ST7735_RED, ST7735_BLACK);
+    ST7735_WriteString(24, 72, "DENIED", Font_11x18, ST7735_RED, ST7735_BLACK);
+
+    ST7735_WriteString(28, 130, attemptText, Font_7x10, ST7735_YELLOW, ST7735_BLACK);
+}
+
+void Screen_Locked(void)
+{
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 26, ST7735_RED);
+    ST7735_WriteString(20, 7, "SECURITY", Font_7x10, ST7735_WHITE, ST7735_RED);
+
+    ST7735_WriteString(22, 48, "SYSTEM", Font_11x18, ST7735_RED, ST7735_BLACK);
+    ST7735_WriteString(24, 76, "LOCKED", Font_11x18, ST7735_RED, ST7735_BLACK);
+
+    ST7735_WriteString(10, 135, "RESET BOARD", Font_7x10, ST7735_YELLOW, ST7735_BLACK);
+}
+
+void Screen_Cleared(void)
+{
+    ST7735_FillScreen(ST7735_BLACK);
+
+    ST7735_FillRectangle(0, 0, 128, 26, ST7735_YELLOW);
+    ST7735_WriteString(18, 7, "PIN RESET", Font_7x10, ST7735_BLACK, ST7735_YELLOW);
+
+    ST7735_WriteString(18, 60, "CLEARED", Font_11x18, ST7735_WHITE, ST7735_BLACK);
+}
+
+/* ---------------- ACCESS LOGIC ---------------- */
+
+void Access_Granted(void)
+{
+    wrongAttempts = 0;
+
+    UART_Print("\r\n\r\n>>> ACCESS GRANTED <<<\r\n");
+
+    Screen_Granted();
+
+    Beep(140);
+    HAL_Delay(250);
+    Beep(140);
+    HAL_Delay(250);
+    Beep(140);
+
+    HAL_Delay(6000);
+}
+
+void Access_Denied(void)
+{
+    wrongAttempts++;
+
+    UART_Print("\r\n\r\n>>> ACCESS DENIED <<<\r\n");
+
+    char msg[40];
+    sprintf(msg, "Wrong attempt: %d/3\r\n", wrongAttempts);
+    UART_Print(msg);
+
+    Screen_Denied();
+
+    Beep(400);
+    HAL_Delay(250);
+    Beep(400);
+
+    if (wrongAttempts >= MAX_ATTEMPTS)
+    {
+        System_Locked();
+    }
+    else
+    {
+        HAL_Delay(4000);
+    }
+}
+
+void System_Locked(void)
+{
+    systemLocked = 1;
+
+    UART_Print("\r\n!!! SYSTEM LOCKED !!!\r\n");
+    UART_Print("Reset board to restart.\r\n");
+
+    Screen_Locked();
+
+    while (1)
+    {
+        Beep(300);
+        HAL_Delay(500);
+    }
+}
+
+/* ---------------- BUZZER ---------------- */
+
+void Beep(uint16_t duration_ms)
+{
+    uint32_t start = HAL_GetTick();
+
+    while ((HAL_GetTick() - start) < duration_ms)
+    {
+        HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
+        HAL_Delay(5);
+        HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+        HAL_Delay(5);
+    }
+}
+
+/* ---------------- KEYPAD ---------------- */
+
+char Keypad_Read(void)
+{
+    for (int drive = 0; drive < 7; drive++)
+    {
+        for (int i = 0; i < 7; i++)
+        {
+            if (i == drive)
+                Set_Pin_Output_Low(i);
+            else
+                Set_Pin_InputPullup(i);
+        }
+
+        HAL_Delay(2);
+
+        for (int read = 0; read < 7; read++)
+        {
+            if (read == drive)
+                continue;
+
+            if (HAL_GPIO_ReadPin(keyPorts[read], keyPins[read]) == GPIO_PIN_RESET)
+            {
+                char key = Get_Key_From_Pair(drive + 1, read + 1);
+
+                while (HAL_GPIO_ReadPin(keyPorts[read], keyPins[read]) == GPIO_PIN_RESET)
+                    HAL_Delay(5);
+
+                HAL_Delay(30);
+                return key;
+            }
+        }
+    }
+
+    return 0;
+}
+
+char Get_Key_From_Pair(int a, int b)
+{
+    for (int i = 0; i < 12; i++)
+    {
+        if ((keyPairs[i].pinA == a && keyPairs[i].pinB == b) ||
+            (keyPairs[i].pinA == b && keyPairs[i].pinB == a))
+        {
+            return keyPairs[i].key;
+        }
+    }
+
+    return '?';
+}
+
+void Set_Pin_Output_Low(int index)
+{
+    if (keyPorts[index] == GPIOA &&
+       (keyPins[index] == GPIO_PIN_0 ||
+        keyPins[index] == GPIO_PIN_4 ||
+        keyPins[index] == GPIO_PIN_5 ||
+        keyPins[index] == GPIO_PIN_6 ||
+        keyPins[index] == GPIO_PIN_7))
+    {
+        return;
+    }
+
+    GPIO_InitTypeDef g = {0};
+
+    if (keyPorts[index] == GPIOA)
+        __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    if (keyPorts[index] == GPIOB)
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    g.Pin = keyPins[index];
+    g.Mode = GPIO_MODE_OUTPUT_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(keyPorts[index], &g);
+    HAL_GPIO_WritePin(keyPorts[index], keyPins[index], GPIO_PIN_RESET);
+}
+
+void Set_Pin_InputPullup(int index)
+{
+    if (keyPorts[index] == GPIOA &&
+       (keyPins[index] == GPIO_PIN_0 ||
+        keyPins[index] == GPIO_PIN_4 ||
+        keyPins[index] == GPIO_PIN_5 ||
+        keyPins[index] == GPIO_PIN_6 ||
+        keyPins[index] == GPIO_PIN_7))
+    {
+        return;
+    }
+
+    GPIO_InitTypeDef g = {0};
+
+    if (keyPorts[index] == GPIOA)
+        __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    if (keyPorts[index] == GPIOB)
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    g.Pin = keyPins[index];
+    g.Mode = GPIO_MODE_INPUT;
+    g.Pull = GPIO_PULLUP;
+
+    HAL_GPIO_Init(keyPorts[index], &g);
+}
+
+/* ---------------- UART / SPI / CLOCK ---------------- */
+
+void UART_Print(char *msg)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+}
+
+void MX_BUZZER_GPIO_Init(void)
+{
+    GPIO_InitTypeDef g = {0};
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    g.Pin = BUZZER_PIN;
+    g.Mode = GPIO_MODE_OUTPUT_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(BUZZER_PORT, &g);
+    HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+}
+
+void MX_SPI1_Init(void)
+{
+    GPIO_InitTypeDef g = {0};
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_SPI1_CLK_ENABLE();
+
+    g.Pin = GPIO_PIN_5 | GPIO_PIN_7;
+    g.Mode = GPIO_MODE_AF_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    g.Alternate = GPIO_AF5_SPI1;
+    HAL_GPIO_Init(GPIOA, &g);
+
+    g.Pin = GPIO_PIN_0 | GPIO_PIN_4 | GPIO_PIN_6;
+    g.Mode = GPIO_MODE_OUTPUT_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &g);
+
+    hspi1.Instance = SPI1;
+    hspi1.Init.Mode = SPI_MODE_MASTER;
+    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+    hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+    hspi1.Init.NSS = SPI_NSS_SOFT;
+    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+
+    HAL_SPI_Init(&hspi1);
+}
+
+void MX_USART2_UART_Init(void)
+{
+    GPIO_InitTypeDef g = {0};
+
+    __HAL_RCC_USART2_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    g.Pin = GPIO_PIN_2 | GPIO_PIN_3;
+    g.Mode = GPIO_MODE_AF_PP;
+    g.Pull = GPIO_PULLUP;
+    g.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    g.Alternate = GPIO_AF7_USART2;
+
+    HAL_GPIO_Init(GPIOA, &g);
+
+    huart2.Instance = USART2;
+    huart2.Init.BaudRate = 115200;
+    huart2.Init.WordLength = UART_WORDLENGTH_8B;
+    huart2.Init.StopBits = UART_STOPBITS_1;
+    huart2.Init.Parity = UART_PARITY_NONE;
+    huart2.Init.Mode = UART_MODE_TX_RX;
+    huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+    huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+    huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+
+    HAL_UART_Init(&huart2);
+}
+
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+    RCC_OscInitStruct.MSIState = RCC_MSI_ON;
+    RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
+    RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+
+    HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+    RCC_ClkInitStruct.ClockType =
+        RCC_CLOCKTYPE_HCLK |
+        RCC_CLOCKTYPE_SYSCLK |
+        RCC_CLOCKTYPE_PCLK1 |
+        RCC_CLOCKTYPE_PCLK2;
+
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+    HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0);
+}
+
+void SysTick_Handler(void)
+{
+    HAL_IncTick();
+}
