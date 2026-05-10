@@ -1,7 +1,6 @@
 # Smart Access Security System
-### EENG1030 — Embedded Systems | Project 2: Specialist Embedded Systems Project
+### Specialist Embedded Systems Project
 **Student:** Kotla Jhansi Lakshmi | **Student No:** A00046968
-**Submission Date:** 10 May 2026
 
 ---
 
@@ -74,7 +73,7 @@ The ST7735 is an SPI-only device. Even if an I2C display were available, SPI at 
 
 ## 4. Circuit Schematic and Pin Map
 
-The circuit schematic is located at 
+The circuit schematic is located at Schematic-smart access.png
 
 ### Complete Pin Allocation
 
