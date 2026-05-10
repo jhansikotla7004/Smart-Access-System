@@ -1,0 +1,22 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Object files
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+
+# IDE temp files
+*.bak
+*~
