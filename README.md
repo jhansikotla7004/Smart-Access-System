@@ -74,7 +74,7 @@ The ST7735 is an SPI-only device. Even if an I2C display were available, SPI at 
 
 ## 4. Circuit Schematic and Pin Map
 
-The circuit schematic is located at [`schematic/smart_access_schematic.png`](schematic/smart_access_schematic.png).
+The circuit schematic is located at Schematic-smart access.png
 
 ### Complete Pin Allocation
 
